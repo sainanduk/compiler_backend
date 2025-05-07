@@ -18,71 +18,90 @@ type ExecuteResponse struct {
 	RequestID string `json:"request_id,omitempty"`
 }
 
-func RunCode(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	handleCodeExecution(w, r, false)
-}
-
-func SubmitCode(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	handleCodeExecution(w, r, true)
-}
-
-func handleCodeExecution(w http.ResponseWriter, r *http.Request, isSubmission bool) {
-	w.Header().Set("Content-Type", "application/json")
-
-	// Create context with timeout
+func ExecuteHandler(w http.ResponseWriter, r *http.Request) {
+	// Set timeout context
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
 
-	// Parse request
 	var req models.ExecuteRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		sendErrorResponse(w, "Invalid request format", http.StatusBadRequest, "")
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
 
 	// Validate request
-	if err := validateRequest(req); err != nil {
-		sendErrorResponse(w, err.Error(), http.StatusBadRequest, "")
+	if req.Language == "" || req.Code == "" {
+		http.Error(w, "Language and code are required", http.StatusBadRequest)
 		return
 	}
 
-	// Generate request ID
-	requestID := fmt.Sprintf("%d", time.Now().UnixNano())
-
-	// Execute code
+	// Execute code with timeout
 	output, err := runner.ExecuteInDocker(ctx, req)
-
-	response := ExecuteResponse{
-		Timestamp: time.Now().Unix(),
-		RequestID: requestID,
-	}
-
 	if err != nil {
-		if ctx.Err() == context.DeadlineExceeded {
-			response.Status = "timeout"
-			response.Error = "Execution timed out"
-			w.WriteHeader(http.StatusGatewayTimeout)
-		} else {
-			response.Status = "error"
-			response.Error = err.Error()
-			w.WriteHeader(http.StatusInternalServerError)
+		// Check if it's a timeout or rate limit error
+		if err.Error() == "request cancelled: context deadline exceeded" {
+			http.Error(w, "Request timed out", http.StatusGatewayTimeout)
+			return
 		}
-	} else {
-		response.Status = "success"
-		response.Output = output
+		if err.Error() == "server is busy, please try again later" {
+			http.Error(w, "Server is busy, please try again later", http.StatusTooManyRequests)
+			return
+		}
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
 	}
 
-	json.NewEncoder(w).Encode(response)
+	// Send response
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"output":     output,
+		"status":     "success",
+		"timestamp":  time.Now().Unix(),
+		"request_id": time.Now().UnixNano(),
+	})
+}
+
+func SubmitHandler(w http.ResponseWriter, r *http.Request) {
+	// Set timeout context
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+
+	var req models.ExecuteRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	// Validate request
+	if req.Language == "" || req.Code == "" {
+		http.Error(w, "Language and code are required", http.StatusBadRequest)
+		return
+	}
+
+	// Execute code with timeout
+	output, err := runner.ExecuteInDocker(ctx, req)
+	if err != nil {
+		// Check if it's a timeout or rate limit error
+		if err.Error() == "request cancelled: context deadline exceeded" {
+			http.Error(w, "Request timed out", http.StatusGatewayTimeout)
+			return
+		}
+		if err.Error() == "server is busy, please try again later" {
+			http.Error(w, "Server is busy, please try again later", http.StatusTooManyRequests)
+			return
+		}
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// Send response
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"output":     output,
+		"status":     "success",
+		"timestamp":  time.Now().Unix(),
+		"request_id": time.Now().UnixNano(),
+	})
 }
 
 func validateRequest(req models.ExecuteRequest) error {

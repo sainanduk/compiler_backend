@@ -29,6 +29,7 @@ type ExecutionRequest struct {
 	ID       string
 	Request  models.ExecuteRequest
 	Response chan ExecutionResult
+	Timeout  time.Duration
 }
 
 // ExecutionResult represents the result of code execution
@@ -42,6 +43,10 @@ var (
 	requestChan = make(chan ExecutionRequest, 100) // Buffer for requests
 	workerCount = 10                               // Number of concurrent workers
 	workerWg    sync.WaitGroup
+
+	// Rate limiting
+	rateLimiter    = make(chan struct{}, 20) // Allow 20 concurrent requests
+	requestTimeout = 30 * time.Second        // Default timeout for requests
 )
 
 func init() {
@@ -58,11 +63,26 @@ func init() {
 func worker() {
 	defer workerWg.Done()
 	for req := range requestChan {
-		output, err := executeCode(req.Request)
-		req.Response <- ExecutionResult{
-			Output: output,
-			Error:  err,
+		// Create a context with timeout
+		ctx, cancel := context.WithTimeout(context.Background(), req.Timeout)
+
+		// Try to acquire rate limiter
+		select {
+		case rateLimiter <- struct{}{}:
+			// Got rate limit token
+			output, err := executeCodeWithContext(ctx, req.Request)
+			req.Response <- ExecutionResult{
+				Output: output,
+				Error:  err,
+			}
+			<-rateLimiter // Release rate limit token
+		case <-ctx.Done():
+			// Context timed out or was cancelled
+			req.Response <- ExecutionResult{
+				Error: fmt.Errorf("request timed out or rate limit exceeded"),
+			}
 		}
+		cancel()
 	}
 }
 
@@ -92,38 +112,7 @@ func getLanguageSpec(language string) (string, string) {
 	}
 }
 
-func ExecuteInDocker(ctx context.Context, req models.ExecuteRequest) (string, error) {
-	// Create response channel
-	responseChan := make(chan ExecutionResult, 1)
-
-	// Generate unique request ID
-	requestID := fmt.Sprintf("%d", time.Now().UnixNano())
-
-	// Create execution request
-	execReq := ExecutionRequest{
-		ID:       requestID,
-		Request:  req,
-		Response: responseChan,
-	}
-
-	// Send request to worker pool
-	select {
-	case requestChan <- execReq:
-		// Request accepted
-	case <-ctx.Done():
-		return "", fmt.Errorf("request cancelled: %w", ctx.Err())
-	}
-
-	// Wait for response
-	select {
-	case result := <-responseChan:
-		return result.Output, result.Error
-	case <-ctx.Done():
-		return "", fmt.Errorf("request cancelled: %w", ctx.Err())
-	}
-}
-
-func executeCode(req models.ExecuteRequest) (string, error) {
+func executeCodeWithContext(ctx context.Context, req models.ExecuteRequest) (string, error) {
 	stats := ExecutionStats{
 		StartTime: time.Now(),
 		Language:  req.Language,
@@ -172,7 +161,7 @@ func executeCode(req models.ExecuteRequest) (string, error) {
 	}
 
 	// Run the code inside the container with resource limits
-	cmd := exec.Command("docker", "run", "--rm",
+	cmd := exec.CommandContext(ctx, "docker", "run", "--rm",
 		"--memory=512m",         // Memory limit
 		"--cpus=1",              // CPU limit
 		"--network=none",        // No network access
@@ -198,4 +187,39 @@ func executeCode(req models.ExecuteRequest) (string, error) {
 	stats.Success = true
 	statsChan <- stats
 	return string(output), nil
+}
+
+func ExecuteInDocker(ctx context.Context, req models.ExecuteRequest) (string, error) {
+	// Create response channel
+	responseChan := make(chan ExecutionResult, 1)
+
+	// Generate unique request ID
+	requestID := fmt.Sprintf("%d", time.Now().UnixNano())
+
+	// Create execution request with timeout
+	execReq := ExecutionRequest{
+		ID:       requestID,
+		Request:  req,
+		Response: responseChan,
+		Timeout:  requestTimeout,
+	}
+
+	// Try to send request to worker pool with timeout
+	select {
+	case requestChan <- execReq:
+		// Request accepted
+	case <-ctx.Done():
+		return "", fmt.Errorf("request cancelled: %w", ctx.Err())
+	default:
+		// Queue is full
+		return "", fmt.Errorf("server is busy, please try again later")
+	}
+
+	// Wait for response with context timeout
+	select {
+	case result := <-responseChan:
+		return result.Output, result.Error
+	case <-ctx.Done():
+		return "", fmt.Errorf("request cancelled: %w", ctx.Err())
+	}
 }
