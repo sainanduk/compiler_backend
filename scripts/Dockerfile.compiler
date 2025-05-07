@@ -1,0 +1,13 @@
+FROM ubuntu:20.04
+
+# Prevent tzdata from prompting for input
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt update && apt install -y \
+    tzdata \
+    python3 \
+    gcc \
+    g++ \
+    golang
+
+WORKDIR /code
