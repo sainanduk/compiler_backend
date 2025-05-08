@@ -10,12 +10,18 @@ import (
 	"time"
 )
 
+type ExecutionMetrics struct {
+	ExecutionTime float64 `json:"execution_time_ms"` // Time taken in milliseconds
+	MemoryUsed    int64   `json:"memory_used_kb"`    // Memory used in KB
+}
+
 type ExecuteResponse struct {
-	Output    string `json:"output"`
-	Error     string `json:"error,omitempty"`
-	Status    string `json:"status"`
-	Timestamp int64  `json:"timestamp"`
-	RequestID string `json:"request_id,omitempty"`
+	Output    string           `json:"output"`
+	Error     string           `json:"error,omitempty"`
+	Status    string           `json:"status"`
+	Timestamp int64            `json:"timestamp"`
+	RequestID string           `json:"request_id,omitempty"`
+	Metrics   ExecutionMetrics `json:"metrics,omitempty"`
 }
 
 func ExecuteHandler(w http.ResponseWriter, r *http.Request) {
@@ -35,8 +41,15 @@ func ExecuteHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Start timing
+	startTime := time.Now()
+
 	// Execute code with timeout
 	output, err := runner.ExecuteInDocker(ctx, req)
+
+	// Calculate execution time
+	executionTime := time.Since(startTime).Seconds() * 1000 // Convert to milliseconds
+
 	if err != nil {
 		// Check if it's a timeout or rate limit error
 		if err.Error() == "request cancelled: context deadline exceeded" {
@@ -51,14 +64,28 @@ func ExecuteHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Get container stats
+	containerStats, err := runner.GetContainerStats(ctx, req)
+	if err != nil {
+		// Log the error but continue with the response
+		fmt.Printf("Error getting container stats: %v\n", err)
+	}
+
+	// Prepare response
+	response := ExecuteResponse{
+		Output:    output,
+		Status:    "success",
+		Timestamp: time.Now().Unix(),
+		RequestID: fmt.Sprintf("%d", time.Now().UnixNano()),
+		Metrics: ExecutionMetrics{
+			ExecutionTime: executionTime,
+			MemoryUsed:    containerStats.MemoryUsed,
+		},
+	}
+
 	// Send response
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"output":     output,
-		"status":     "success",
-		"timestamp":  time.Now().Unix(),
-		"request_id": time.Now().UnixNano(),
-	})
+	json.NewEncoder(w).Encode(response)
 }
 
 func SubmitHandler(w http.ResponseWriter, r *http.Request) {
@@ -107,7 +134,7 @@ func SubmitHandler(w http.ResponseWriter, r *http.Request) {
 func validateRequest(req models.ExecuteRequest) error {
 	// Check language
 	switch req.Language {
-	case "python", "go", "cpp", "c":
+	case "python", "java", "cpp", "c", "javascript", "go":
 		// Valid language
 	default:
 		return fmt.Errorf("unsupported language: %s", req.Language)

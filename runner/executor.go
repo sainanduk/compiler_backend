@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -36,6 +37,11 @@ type ExecutionRequest struct {
 type ExecutionResult struct {
 	Output string
 	Error  error
+}
+
+// ContainerStats represents the resource usage of a container
+type ContainerStats struct {
+	MemoryUsed int64 `json:"memory_used_kb"`
 }
 
 var (
@@ -101,12 +107,16 @@ func getLanguageSpec(language string) (string, string) {
 	switch language {
 	case "python":
 		return "main.py", "echo \"$INPUT\" | python3 /code/main.py"
-	case "go":
-		return "main.go", "go run /code/main.go"
+	case "java":
+		return "Main.java", "javac /code/Main.java && java -cp /code Main"
 	case "cpp":
 		return "main.cpp", "g++ /code/main.cpp -o /code/a.out && /code/a.out"
 	case "c":
 		return "main.c", "gcc /code/main.c -o /code/a.out && /code/a.out"
+	case "javascript":
+		return "main.js", "node /code/main.js"
+	case "go":
+		return "main.go", "go run /code/main.go"
 	default:
 		return "", ""
 	}
@@ -160,8 +170,12 @@ func executeCodeWithContext(ctx context.Context, req models.ExecuteRequest) (str
 		return "", fmt.Errorf("failed to write code file: %w", err)
 	}
 
+	// Create container name
+	containerName := fmt.Sprintf("compiler_%s", execID)
+
 	// Run the code inside the container with resource limits
 	cmd := exec.CommandContext(ctx, "docker", "run", "--rm",
+		"--name", containerName,
 		"--memory=512m",         // Memory limit
 		"--cpus=1",              // CPU limit
 		"--network=none",        // No network access
@@ -222,4 +236,33 @@ func ExecuteInDocker(ctx context.Context, req models.ExecuteRequest) (string, er
 	case <-ctx.Done():
 		return "", fmt.Errorf("request cancelled: %w", ctx.Err())
 	}
+}
+
+// GetContainerStats retrieves the resource usage statistics for a container
+func GetContainerStats(ctx context.Context, req models.ExecuteRequest) (ContainerStats, error) {
+	// Get the container ID from the execution
+	containerID := fmt.Sprintf("compiler_%d", time.Now().UnixNano())
+
+	// Get container stats using docker stats
+	cmd := exec.CommandContext(ctx, "docker", "stats", containerID, "--no-stream", "--format", "{{.MemUsage}}")
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return ContainerStats{}, fmt.Errorf("failed to get container stats: %w", err)
+	}
+
+	// Parse memory usage (format: "123.45MB / 512MB")
+	memParts := strings.Split(strings.TrimSpace(string(output)), " / ")
+	if len(memParts) != 2 {
+		return ContainerStats{}, fmt.Errorf("invalid memory format")
+	}
+	memUsed := strings.TrimSpace(memParts[0])
+	memUsed = strings.TrimSuffix(memUsed, "MB")
+	memUsedKB, err := strconv.ParseFloat(memUsed, 64)
+	if err != nil {
+		return ContainerStats{}, fmt.Errorf("failed to parse memory usage: %w", err)
+	}
+
+	return ContainerStats{
+		MemoryUsed: int64(memUsedKB * 1024), // Convert MB to KB
+	}, nil
 }
