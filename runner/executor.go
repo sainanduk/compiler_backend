@@ -104,22 +104,22 @@ func collectStats() {
 }
 
 func getLanguageSpec(language string) (string, string) {
-	switch language {
-	case "python":
-		return "main.py", "echo \"$INPUT\" | python3 /code/main.py"
-	case "java":
-		return "Main.java", "javac /code/Main.java && java -cp /code Main"
-	case "cpp":
-		return "main.cpp", "g++ /code/main.cpp -o /code/a.out && /code/a.out"
-	case "c":
-		return "main.c", "gcc /code/main.c -o /code/a.out && /code/a.out"
-	case "javascript":
-		return "main.js", "node /code/main.js"
-	case "go":
-		return "main.go", "go run /code/main.go"
-	default:
-		return "", ""
-	}
+    switch language {
+    case "python":
+        return "main.py", "echo \"$INPUT\" | python3 /code/main.py"
+    case "java":
+        return "Main.java", "javac /code/Main.java && echo \"$INPUT\" | java -cp /code Main"
+    case "cpp":
+        return "main.cpp", "g++ /code/main.cpp -o /code/a.out && echo \"$INPUT\" | /code/a.out"
+    case "c":
+        return "main.c", "gcc /code/main.c -o /code/a.out && echo \"$INPUT\" | /code/a.out"
+    case "javascript":
+        return "main.js", "echo \"$INPUT\" | node /code/main.js"
+    case "go":
+        return "main.go", "echo \"$INPUT\" | go run /code/main.go"
+    default:
+        return "", ""
+    }
 }
 
 func executeCodeWithContext(ctx context.Context, req models.ExecuteRequest) (string, error) {
@@ -128,6 +128,15 @@ func executeCodeWithContext(ctx context.Context, req models.ExecuteRequest) (str
 		Language:  req.Language,
 		CodeSize:  len(req.Code),
 		RequestID: fmt.Sprintf("%d", time.Now().UnixNano()),
+	}
+
+	// Check if Docker is available
+	if err := checkDockerAvailability(); err != nil {
+		stats.Success = false
+		stats.ErrorMessage = fmt.Sprintf("Docker not available: %v", err)
+		stats.EndTime = time.Now()
+		statsChan <- stats
+		return "", fmt.Errorf("Docker not available: %w", err)
 	}
 
 	// Create unique directory for this execution
@@ -173,6 +182,11 @@ func executeCodeWithContext(ctx context.Context, req models.ExecuteRequest) (str
 	// Create container name
 	containerName := fmt.Sprintf("compiler_%s", execID)
 
+	// Create a channel to signal when the command is done
+	done := make(chan error, 1)
+	var output []byte
+	var cmdErr error
+
 	// Run the code inside the container with resource limits
 	cmd := exec.CommandContext(ctx, "docker", "run", "--rm",
 		"--name", containerName,
@@ -181,6 +195,8 @@ func executeCodeWithContext(ctx context.Context, req models.ExecuteRequest) (str
 		"--network=none",        // No network access
 		"--pids-limit=100",      // Process limit
 		"--ulimit", "nproc=100", // Set process limit via ulimit
+		// Add timeout to handle infinite loops
+		"--stop-timeout=20",     // Force stop after 20 seconds if not responding
 		"-e", fmt.Sprintf("INPUT=%s", req.Input), // Pass input as environment variable
 		"-v", absExecDir+":/code",
 		"compiler-image",
@@ -188,19 +204,38 @@ func executeCodeWithContext(ctx context.Context, req models.ExecuteRequest) (str
 
 	log.Printf("[DEBUG] Running Docker command: %s", strings.Join(cmd.Args, " "))
 
-	output, err := cmd.CombinedOutput()
+	// Run the command in a goroutine
+	go func() {
+		output, cmdErr = cmd.CombinedOutput()
+		done <- cmdErr
+	}()
 
-	stats.EndTime = time.Now()
-	if err != nil {
-		stats.Success = false
-		stats.ErrorMessage = fmt.Sprintf("execution failed: %v", err)
+	// Wait for either the command to finish or the context to timeout
+	select {
+	case err := <-done:
+		// Command completed normally
+		stats.EndTime = time.Now()
+		if err != nil {
+			stats.Success = false
+			stats.ErrorMessage = fmt.Sprintf("execution failed: %v", err)
+			statsChan <- stats
+			return string(output), fmt.Errorf("execution failed: %w\nOutput: %s", err, string(output))
+		}
+		stats.Success = true
 		statsChan <- stats
-		return string(output), fmt.Errorf("execution failed: %w\nOutput: %s", err, string(output))
+		return string(output), nil
+	case <-ctx.Done():
+		// Context timed out - force kill the container
+		killCmd := exec.Command("docker", "kill", containerName)
+		if err := killCmd.Run(); err != nil {
+			log.Printf("[ERROR] Failed to kill container %s: %v", containerName, err)
+		}
+		stats.EndTime = time.Now()
+		stats.Success = false
+		stats.ErrorMessage = "execution timed out (possible infinite loop detected)"
+		statsChan <- stats
+		return "Execution timed out. Your code may contain an infinite loop or is taking too long to execute.", ctx.Err()
 	}
-
-	stats.Success = true
-	statsChan <- stats
-	return string(output), nil
 }
 
 func ExecuteInDocker(ctx context.Context, req models.ExecuteRequest) (string, error) {
@@ -265,4 +300,13 @@ func GetContainerStats(ctx context.Context, req models.ExecuteRequest) (Containe
 	return ContainerStats{
 		MemoryUsed: int64(memUsedKB * 1024), // Convert MB to KB
 	}, nil
+}
+
+// checkDockerAvailability verifies that Docker is running and accessible
+func checkDockerAvailability() error {
+	cmd := exec.Command("docker", "info")
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("Docker is not running or not accessible: %w", err)
+	}
+	return nil
 }

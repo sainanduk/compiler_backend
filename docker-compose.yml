@@ -1,0 +1,25 @@
+
+services:
+  compiler-server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      network: host
+    ports:
+      - "8001:8001"
+    environment:
+      - PORT=:8001
+      - MAX_WORKERS=10
+      - MAX_QUEUE_SIZE=100
+    volumes:
+      - ./sandbox:/app/sandbox
+    restart: unless-stopped
+
+  compiler-image:
+    build:
+      context: ./scripts
+      dockerfile: Dockerfile.compiler
+      network: host
+    image: compiler-image
+    restart: "no"
+    command: ["tail", "-f", "/dev/null"]
