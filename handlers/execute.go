@@ -27,7 +27,7 @@ type ExecuteResponse struct {
 
 func ExecuteHandler(w http.ResponseWriter, r *http.Request) {
 	// Set timeout context
-	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)  // Reduced from 30 to 20 seconds
 	defer cancel()
 
 	var req models.ExecuteRequest

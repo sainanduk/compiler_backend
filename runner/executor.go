@@ -190,14 +190,13 @@ func executeCodeWithContext(ctx context.Context, req models.ExecuteRequest) (str
 	// Run the code inside the container with resource limits
 	cmd := exec.CommandContext(ctx, "docker", "run", "--rm",
 		"--name", containerName,
-		"--memory=512m",         // Memory limit
-		"--cpus=1",              // CPU limit
-		"--network=none",        // No network access
-		"--pids-limit=100",      // Process limit
-		"--ulimit", "nproc=100", // Set process limit via ulimit
-		// Add timeout to handle infinite loops
-		"--stop-timeout=20",     // Force stop after 20 seconds if not responding
-		"-e", fmt.Sprintf("INPUT=%s", req.Input), // Pass input as environment variable
+		"--memory=512m",         
+		"--cpus=1",              
+		"--network=none",        
+		"--pids-limit=100",      
+		"--ulimit", "nproc=100", 
+		"--stop-timeout=10",     // Reduced from 20 to 10 seconds
+		"-e", fmt.Sprintf("INPUT=%s", req.Input),
 		"-v", absExecDir+":/code",
 		"compiler-image",
 		"sh", "-c", runCmd)
@@ -229,6 +228,11 @@ func executeCodeWithContext(ctx context.Context, req models.ExecuteRequest) (str
 		killCmd := exec.Command("docker", "kill", containerName)
 		if err := killCmd.Run(); err != nil {
 			log.Printf("[ERROR] Failed to kill container %s: %v", containerName, err)
+		}
+		// Force remove the container even if kill failed
+		rmCmd := exec.Command("docker", "rm", "-f", containerName)
+		if err := rmCmd.Run(); err != nil {
+			log.Printf("[ERROR] Failed to remove container %s: %v", containerName, err)
 		}
 		stats.EndTime = time.Now()
 		stats.Success = false

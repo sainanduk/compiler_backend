@@ -1,43 +1,30 @@
 FROM ubuntu:20.04
 
-# Prevent tzdata from prompting for input
+# Avoid prompts from apt
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Install basic tools
-RUN apt-get update && apt-get install -y \
-    curl \
-    gnupg \
-    software-properties-common \
-    wget \
-    git \
-    build-essential \
-    && rm -rf /var/lib/apt/lists/*
-
-# Install Python
+# Install necessary packages
 RUN apt-get update && apt-get install -y \
     python3 \
-    python3-pip \
-    && rm -rf /var/lib/apt/lists/*
-
-# Install Java
-RUN apt-get update && apt-get install -y \
     openjdk-11-jdk \
-    && rm -rf /var/lib/apt/lists/*
-
-# Install C/C++
-RUN apt-get update && apt-get install -y \
-    gcc \
     g++ \
-    && rm -rf /var/lib/apt/lists/*
-
-# Install Node.js (for JavaScript)
-RUN curl -fsSL https://deb.nodesource.com/setup_16.x | bash - \
-    && apt-get install -y nodejs \
-    && rm -rf /var/lib/apt/lists/*
-
-# Install Go
-RUN apt-get update && apt-get install -y \
+    gcc \
+    nodejs \
+    npm \
     golang \
     && rm -rf /var/lib/apt/lists/*
+
+# Create a non-root user
+RUN useradd -m -d /sandbox sandbox
+USER sandbox
+WORKDIR /sandbox
+
+# Set environment variables
+ENV PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+ENV PYTHONUNBUFFERED=1
+ENV NODE_PATH=/usr/lib/node_modules
+
+# Default command (can be overridden)
+CMD ["bash"]
 
 WORKDIR /code
