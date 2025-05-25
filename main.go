@@ -28,6 +28,10 @@ func main() {
 	// Add routes
 	r.HandleFunc("/execute", handlers.ExecuteHandler).Methods("POST")
 	r.HandleFunc("/submit", handlers.SubmitHandler).Methods("POST")
+	r.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("OK"))
+	}).Methods("GET")
 
 	// Create server with timeouts
 	srv := &http.Server{
