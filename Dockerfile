@@ -15,8 +15,16 @@ RUN CGO_ENABLED=0 GOOS=linux go build -o compiler-server .
 # Use a small image for the final container
 FROM alpine:3.16
 
-# Install required dependencies for running code
-RUN apk add --no-cache python3 go gcc g++ musl-dev
+# Install required compilers and tools
+RUN apk add --no-cache \
+    python3 \
+    go \
+    gcc \
+    g++ \
+    musl-dev \
+    openjdk11-jdk \
+    nodejs \
+    npm
 
 # Create a non-root user to run the application
 RUN adduser -D -g '' appuser

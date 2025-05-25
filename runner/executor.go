@@ -104,22 +104,22 @@ func collectStats() {
 }
 
 func getLanguageSpec(language string) (string, string) {
-    switch language {
-    case "python":
-        return "main.py", "echo \"$INPUT\" | python3 /code/main.py"
-    case "java":
-        return "Main.java", "javac /code/Main.java && echo \"$INPUT\" | java -cp /code Main"
-    case "cpp":
-        return "main.cpp", "g++ /code/main.cpp -o /code/a.out && echo \"$INPUT\" | /code/a.out"
-    case "c":
-        return "main.c", "gcc /code/main.c -o /code/a.out && echo \"$INPUT\" | /code/a.out"
-    case "javascript":
-        return "main.js", "echo \"$INPUT\" | node /code/main.js"
-    case "go":
-        return "main.go", "echo \"$INPUT\" | go run /code/main.go"
-    default:
-        return "", ""
-    }
+	switch language {
+	case "python":
+		return "main.py", "echo -e \"$INPUT\" | python3 /code/main.py"
+	case "java":
+		return "Main.java", "javac /code/Main.java && echo -e \"$INPUT\" | java -cp /code Main"
+	case "cpp":
+		return "main.cpp", "g++ /code/main.cpp -o /code/a.out && echo -e \"$INPUT\" | /code/a.out"
+	case "c":
+		return "main.c", "gcc /code/main.c -o /code/a.out && echo -e \"$INPUT\" | /code/a.out"
+	case "javascript":
+		return "main.js", "echo -e \"$INPUT\" | node /code/main.js"
+	case "go":
+		return "main.go", "echo -e \"$INPUT\" | go run /code/main.go"
+	default:
+		return "", ""
+	}
 }
 
 func executeCodeWithContext(ctx context.Context, req models.ExecuteRequest) (string, error) {
@@ -128,6 +128,12 @@ func executeCodeWithContext(ctx context.Context, req models.ExecuteRequest) (str
 		Language:  req.Language,
 		CodeSize:  len(req.Code),
 		RequestID: fmt.Sprintf("%d", time.Now().UnixNano()),
+	}
+
+	// Validate language
+	codeFile, runCmd := getLanguageSpec(req.Language)
+	if codeFile == "" {
+		return "", fmt.Errorf("unsupported language: %s", req.Language)
 	}
 
 	// Check if Docker is available
@@ -167,7 +173,6 @@ func executeCodeWithContext(ctx context.Context, req models.ExecuteRequest) (str
 
 	log.Printf("[INFO] Processing request - ID: %s, Language: %s", execID, req.Language)
 
-	codeFile, runCmd := getLanguageSpec(req.Language)
 	filePath := filepath.Join(execDir, codeFile)
 
 	// Write code to file in the unique directory
@@ -190,12 +195,12 @@ func executeCodeWithContext(ctx context.Context, req models.ExecuteRequest) (str
 	// Run the code inside the container with resource limits
 	cmd := exec.CommandContext(ctx, "docker", "run", "--rm",
 		"--name", containerName,
-		"--memory=512m",         
-		"--cpus=1",              
-		"--network=none",        
-		"--pids-limit=100",      
-		"--ulimit", "nproc=100", 
-		"--stop-timeout=10",     // Reduced from 20 to 10 seconds
+		"--memory=512m",
+		"--cpus=1",
+		"--network=none",
+		"--pids-limit=100",
+		"--ulimit", "nproc=100",
+		"--stop-timeout=10",
 		"-e", fmt.Sprintf("INPUT=%s", req.Input),
 		"-v", absExecDir+":/code",
 		"compiler-image",
@@ -271,7 +276,12 @@ func ExecuteInDocker(ctx context.Context, req models.ExecuteRequest) (string, er
 	// Wait for response with context timeout
 	select {
 	case result := <-responseChan:
-		return result.Output, result.Error
+		// Get memory usage
+		memoryUsage, err := GetContainerStats(ctx, req)
+		if err != nil {
+			return result.Output, result.Error
+		}
+		return fmt.Sprintf("%s\nMemory Used: %d KB", result.Output, memoryUsage.MemoryUsed), result.Error
 	case <-ctx.Done():
 		return "", fmt.Errorf("request cancelled: %w", ctx.Err())
 	}

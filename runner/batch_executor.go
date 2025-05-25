@@ -13,6 +13,9 @@ import (
 
 // ExecuteBatchInDocker executes code against multiple test cases in a single container
 func ExecuteBatchInDocker(ctx context.Context, req models.BatchExecuteRequest) (map[string]string, error) {
+	// Record start time
+	startTime := time.Now()
+
 	// Create unique directory for this execution
 	execID := fmt.Sprintf("%d", time.Now().UnixNano())
 	execDir := filepath.Join("sandbox", execID)
@@ -75,7 +78,7 @@ func ExecuteBatchInDocker(ctx context.Context, req models.BatchExecuteRequest) (
 		"--network=none",        // No network access
 		"--pids-limit=100",      // Process limit
 		"--ulimit", "nproc=100", // Set process limit via ulimit
-		"--stop-timeout=5",      // Force stop after 5 seconds if not responding
+		"--stop-timeout=5", // Force stop after 5 seconds if not responding
 		"-v", absExecDir+":/code",
 		"compiler-image",
 		"sh", "-c", "cd /code && ./run_tests.sh")
@@ -85,16 +88,16 @@ func ExecuteBatchInDocker(ctx context.Context, req models.BatchExecuteRequest) (
 		// Check if it's a compilation error
 		compileErrorPath := filepath.Join(execDir, "compile_error.txt")
 		if _, statErr := os.Stat(compileErrorPath); statErr == nil {
-		    // Read compilation error
-		    compileError, readErr := os.ReadFile(compileErrorPath)
-		    if readErr == nil {
-		        // Return compilation error for all test cases
-		        results := make(map[string]string)
-		        for _, tc := range req.TestCases {
-		            results[tc.ID] = "Compilation error: " + string(compileError)
-		        }
-		        return results, nil
-		    }
+			// Read compilation error
+			compileError, readErr := os.ReadFile(compileErrorPath)
+			if readErr == nil {
+				// Return compilation error for all test cases
+				results := make(map[string]string)
+				for _, tc := range req.TestCases {
+					results[tc.ID] = "Compilation error: " + string(compileError)
+				}
+				return results, nil
+			}
 		}
 		return nil, fmt.Errorf("execution failed: %w\nOutput: %s", err, string(output))
 	}
@@ -111,6 +114,30 @@ func ExecuteBatchInDocker(ctx context.Context, req models.BatchExecuteRequest) (
 		}
 	}
 
+	// Get memory usage
+	executeReq := models.ExecuteRequest{
+		Language: req.Language,
+		Code:     req.Code,
+		Input:    req.TestCases[0].Input, // Use the first test case input for memory stats
+	}
+	memoryUsage, err := GetContainerStats(ctx, executeReq)
+	if err != nil {
+		return results, nil
+	}
+
+	// Append memory usage to results
+	for id, result := range results {
+		results[id] = fmt.Sprintf("%s\nMemory Used: %d KB", result, memoryUsage.MemoryUsed)
+	}
+
+	// Calculate execution time
+	executionTime := time.Since(startTime).Milliseconds()
+
+	// Append execution time to results
+	for id, result := range results {
+		results[id] = fmt.Sprintf("%s\nExecution Time: %d ms", result, executionTime)
+	}
+
 	return results, nil
 }
 
@@ -119,7 +146,7 @@ func createBatchRunnerScript(language string, numTestCases int) string {
 	var sb strings.Builder
 
 	sb.WriteString("#!/bin/sh\n\n")
-	
+
 	// Compile code if needed
 	switch language {
 	case "java":
@@ -141,14 +168,14 @@ func createBatchRunnerScript(language string, numTestCases int) string {
 		sb.WriteString("  exit 1\n")
 		sb.WriteString("fi\n")
 	}
-	
+
 	// Create a function to run a single test case with timeout
 	sb.WriteString(`
 run_test_case() {
     id=$1
     echo "Running test case $id"
     timeout 5s sh -c "cat /code/testcases/$id.in | `)
-	
+
 	// Add language-specific execution command
 	switch language {
 	case "python":
@@ -162,7 +189,7 @@ run_test_case() {
 	case "go":
 		sb.WriteString("go run /code/main.go")
 	}
-	
+
 	sb.WriteString(`" > /code/testcases/$id.out 2>&1
     exit_code=$?
     if [ $exit_code -eq 124 ]; then
@@ -178,6 +205,6 @@ run_test_case() {
 	for i := 0; i < numTestCases; i++ {
 		sb.WriteString(fmt.Sprintf("run_test_case tc_%d\n", i))
 	}
-	
+
 	return sb.String()
 }
