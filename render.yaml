@@ -13,4 +13,9 @@ services:
         value: "100"
     healthCheckPath: /health
     autoDeploy: true
-    plan: free 
+    plan: free
+    port: 8001
+    numInstances: 1
+    scaling:
+      minInstances: 1
+      maxInstances: 1 

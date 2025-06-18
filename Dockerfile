@@ -43,6 +43,3 @@ EXPOSE 8001
 
 # Run the application
 CMD ["./compiler-server"]
-
-# Keep container running
-CMD ["tail", "-f", "/dev/null"]
