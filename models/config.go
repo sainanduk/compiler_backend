@@ -3,6 +3,7 @@ package models
 import (
 	"os"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -24,6 +25,8 @@ func LoadConfig() *Config {
 	port := os.Getenv("PORT")
 	if port == "" {
 		port = ":8001"
+	} else if !strings.HasPrefix(port, ":") {
+		port = ":" + port
 	}
 
 	// Get timeouts from environment or use defaults

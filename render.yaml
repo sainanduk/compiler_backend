@@ -6,7 +6,7 @@ services:
     dockerCommand: docker-compose up
     envVars:
       - key: PORT
-        value: :8001
+        value: ":8001"
       - key: MAX_WORKERS
         value: "10"
       - key: MAX_QUEUE_SIZE
