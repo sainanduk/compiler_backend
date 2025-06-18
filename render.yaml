@@ -1,0 +1,16 @@
+services:
+  - type: web
+    name: online-compiler
+    env: docker
+    dockerfilePath: ./Dockerfile
+    dockerCommand: docker-compose up
+    envVars:
+      - key: PORT
+        value: :8001
+      - key: MAX_WORKERS
+        value: "10"
+      - key: MAX_QUEUE_SIZE
+        value: "100"
+    healthCheckPath: /health
+    autoDeploy: true
+    plan: free 

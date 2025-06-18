@@ -1,0 +1,36 @@
+app = "online-compiler"
+primary_region = "sin"  # Singapore region, you can change this
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  PORT = ":8001"
+  MAX_WORKERS = "10"
+  MAX_QUEUE_SIZE = "100"
+
+[http_service]
+  internal_port = 8001
+  force_https = true
+  auto_stop_machines = true
+  auto_start_machines = true
+  min_machines_running = 0
+  processes = ["app"]
+
+[[services.ports]]
+  port = 80
+  handlers = ["http"]
+  force_https = true
+
+[[services.ports]]
+  port = 443
+  handlers = ["tls", "http"]
+
+[[services.http_checks]]
+  interval = "30s"
+  timeout = "5s"
+  grace_period = "10s"
+  method = "get"
+  path = "/health"
+  protocol = "http"
+  tls_skip_verify = true 
